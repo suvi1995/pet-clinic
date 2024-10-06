@@ -2,19 +2,20 @@ pipeline {
     agent any 
     
     tools{
-        jdk 'jdk11'
-        maven 'maven3'
+        jdk 'jdk'
+        maven 'Maven'
     }
     
     environment {
-        SCANNER_HOME=tool 'sonar-scanner'
+        registry = '897886641913.dkr.ecr.us-east-1.amazonaws.com/demo'
+        KUBECONFIG_PATH = credentials('kubeconfig-file')
     }
     
     stages{
         
         stage("Git Checkout"){
             steps{
-                git branch: 'main', changelog: false, poll: false, url: 'https://github.com/jaiswaladi246/Petclinic.git'
+                git branch: 'main', changelog: false, poll: false, url: 'https://github.com/suvi1995/demoproject.git'
             }
         }
         
@@ -30,53 +31,40 @@ pipeline {
             }
         }
         
-        stage("Sonarqube Analysis "){
+        stage("Build"){
             steps{
-                withSonarQubeEnv('sonar-server') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Petclinic \
-                    -Dsonar.java.binaries=. \
-                    -Dsonar.projectKey=Petclinic '''
-    
+                sh "mvn clean install"
+            }
+        }
+        stage('Docker Build') {
+            steps {
+               script {
+                  dockerImage = docker.build registry 
+                  dockerImage.tag("$BUILD_NUMBER")
+              }
+            }
+        }
+        
+          stage('Docker Push') {
+            steps {
+                script {
+                  sh'aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 897886641913.dkr.ecr.us-east-1.amazonaws.com'
+                  sh'docker build -t demo .'
+                  sh 'docker tag demo:latest 897886641913.dkr.ecr.us-east-1.amazonaws.com/demo:latest'
+                  sh'docker push 897886641913.dkr.ecr.us-east-1.amazonaws.com/demo:latest'
                 }
+               
             }
         }
-        
-        stage("OWASP Dependency Check"){
-            steps{
-                dependencyCheck additionalArguments: '--scan ./ --format HTML ', odcInstallation: 'DP'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-            }
-        }
-        
-         stage("Build"){
-            steps{
-                sh " mvn clean install"
-            }
-        }
-        
-        stage("Docker Build & Push"){
-            steps{
-                script{
-                   withDockerRegistry(credentialsId: '58be877c-9294-410e-98ee-6a959d73b352', toolName: 'docker') {
-                        
-                        sh "docker build -t image1 ."
-                        sh "docker tag image1 adijaiswal/pet-clinic123:latest "
-                        sh "docker push adijaiswal/pet-clinic123:latest "
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    withEnv(["KUBECONFIG=${env.KUBECONFIG_PATH}"]) {
+                        sh 'kubectl apply -f deployment.yaml'
                     }
-                }
+                }  
             }
         }
         
-        stage("TRIVY"){
-            steps{
-                sh " trivy image adijaiswal/pet-clinic123:latest"
-            }
-        }
-        
-        stage("Deploy To Tomcat"){
-            steps{
-                sh "cp  /var/lib/jenkins/workspace/CI-CD/target/petclinic.war /opt/apache-tomcat-9.0.65/webapps/ "
-            }
-        }
     }
 }
